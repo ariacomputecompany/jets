@@ -5,6 +5,6 @@ pub mod proto {
 pub mod service;
 
 pub use service::{
-    AckAction, AckResult, DlqMessage, JetsError, JetsService, ListDlqFilter, PublishInput,
-    PublishResult, ReadInboxFilter, InboxMessage,
+    AckAction, AckResult, DlqMessage, InboxMessage, JetsError, JetsService, ListDlqFilter,
+    PublishInput, PublishResult, ReadInboxFilter,
 };

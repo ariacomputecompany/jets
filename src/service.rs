@@ -117,9 +117,14 @@ impl Default for JetsService {
 }
 
 impl JetsService {
+    pub fn nats_url(&self) -> &str {
+        &self.nats_url
+    }
+
     pub fn from_env() -> Self {
         Self {
-            nats_url: std::env::var("JETS_NATS_URL").unwrap_or_else(|_| DEFAULT_NATS_URL.to_string()),
+            nats_url: std::env::var("JETS_NATS_URL")
+                .unwrap_or_else(|_| DEFAULT_NATS_URL.to_string()),
             subject_cmd_prefix: std::env::var("JETS_SUBJECT_CMD_PREFIX")
                 .unwrap_or_else(|_| DEFAULT_SUBJECT_CMD_PREFIX.to_string()),
             subject_evt_prefix: std::env::var("JETS_SUBJECT_EVT_PREFIX")
@@ -132,7 +137,8 @@ impl JetsService {
                 .unwrap_or_else(|_| DEFAULT_AUDIT_STREAM_PREFIX.to_string()),
             dlq_stream: std::env::var("JETS_DLQ_STREAM")
                 .unwrap_or_else(|_| DEFAULT_DLQ_STREAM.to_string()),
-            state_kv: std::env::var("JETS_STATE_KV").unwrap_or_else(|_| DEFAULT_STATE_KV.to_string()),
+            state_kv: std::env::var("JETS_STATE_KV")
+                .unwrap_or_else(|_| DEFAULT_STATE_KV.to_string()),
             idempotency_kv: std::env::var("JETS_IDEMPOTENCY_KV")
                 .unwrap_or_else(|_| DEFAULT_IDEMPOTENCY_KV.to_string()),
             data_kv: std::env::var("JETS_DATA_KV").unwrap_or_else(|_| DEFAULT_DATA_KV.to_string()),
@@ -144,6 +150,11 @@ impl JetsService {
             .await
             .map_err(|e| JetsError::Transport(format!("failed to connect to NATS: {}", e)))?;
         Ok(jetstream::new(client))
+    }
+
+    pub async fn health_check(&self) -> Result<(), JetsError> {
+        let _ = self.js().await?;
+        Ok(())
     }
 
     fn stream_name(prefix: &str, target: &str) -> String {
@@ -171,18 +182,29 @@ impl JetsService {
             return Err(JetsError::InvalidInput("version must be > 0".to_string()));
         }
         if env.msg_id.trim().is_empty() || env.from.trim().is_empty() || env.to.trim().is_empty() {
-            return Err(JetsError::InvalidInput("msg_id, from, and to are required".to_string()));
+            return Err(JetsError::InvalidInput(
+                "msg_id, from, and to are required".to_string(),
+            ));
         }
         if env.ttl_ms == 0 || env.sent_at == 0 {
-            return Err(JetsError::InvalidInput("ttl_ms and sent_at are required".to_string()));
+            return Err(JetsError::InvalidInput(
+                "ttl_ms and sent_at are required".to_string(),
+            ));
         }
         let now_ms = chrono::Utc::now().timestamp_millis() as u64;
         if now_ms > env.sent_at.saturating_add(env.ttl_ms) {
-            return Err(JetsError::InvalidInput("message is expired by ttl".to_string()));
+            return Err(JetsError::InvalidInput(
+                "message is expired by ttl".to_string(),
+            ));
         }
-        let payload = env.payload.as_ref().ok_or_else(|| JetsError::InvalidInput("payload is required".to_string()))?;
+        let payload = env
+            .payload
+            .as_ref()
+            .ok_or_else(|| JetsError::InvalidInput("payload is required".to_string()))?;
         if payload.kind.is_none() {
-            return Err(JetsError::InvalidInput("payload kind is required".to_string()));
+            return Err(JetsError::InvalidInput(
+                "payload kind is required".to_string(),
+            ));
         }
         Ok(())
     }
@@ -198,23 +220,37 @@ impl JetsService {
 
         let allowed = match payload_kind {
             jets_proto::payload::Kind::StateSnapshot(_) => {
-                matches!(level, PermissionLevel::ReadOnly | PermissionLevel::WriteState | PermissionLevel::Admin | PermissionLevel::Full)
+                matches!(
+                    level,
+                    PermissionLevel::ReadOnly
+                        | PermissionLevel::WriteState
+                        | PermissionLevel::Admin
+                        | PermissionLevel::Full
+                )
             }
             jets_proto::payload::Kind::StatePatch(_)
             | jets_proto::payload::Kind::FilePatch(_)
             | jets_proto::payload::Kind::EnvPatch(_)
             | jets_proto::payload::Kind::LifecycleAction(_) => {
-                matches!(level, PermissionLevel::WriteState | PermissionLevel::Admin | PermissionLevel::Full)
+                matches!(
+                    level,
+                    PermissionLevel::WriteState | PermissionLevel::Admin | PermissionLevel::Full
+                )
             }
             jets_proto::payload::Kind::ExecCommand(_) => {
-                matches!(level, PermissionLevel::Execute | PermissionLevel::Admin | PermissionLevel::Full)
+                matches!(
+                    level,
+                    PermissionLevel::Execute | PermissionLevel::Admin | PermissionLevel::Full
+                )
             }
             jets_proto::payload::Kind::Ack(_) | jets_proto::payload::Kind::Error(_) => {
                 matches!(level, PermissionLevel::Admin | PermissionLevel::Full)
             }
         };
         if !allowed {
-            return Err(JetsError::InvalidInput("permission level does not allow payload kind".to_string()));
+            return Err(JetsError::InvalidInput(
+                "permission level does not allow payload kind".to_string(),
+            ));
         }
         Ok(())
     }
@@ -258,15 +294,16 @@ impl JetsService {
     ) -> Result<jetstream::kv::Store, JetsError> {
         match js.get_key_value(bucket.to_string()).await {
             Ok(store) => Ok(store),
-            Err(_) => js
-                .create_key_value(jetstream::kv::Config {
+            Err(_) => {
+                js.create_key_value(jetstream::kv::Config {
                     bucket: bucket.to_string(),
                     history,
                     max_age: std::time::Duration::from_secs(max_age_secs),
                     ..Default::default()
                 })
                 .await
-                .map_err(|e| JetsError::Transport(format!("failed to ensure kv {}: {}", bucket, e))),
+                .map_err(|e| JetsError::Transport(format!("failed to ensure kv {}: {}", bucket, e)))
+            }
         }
     }
 
@@ -305,7 +342,11 @@ impl JetsService {
         let parsed: serde_json::Value = serde_json::from_slice(&entry)
             .map_err(|e| JetsError::Internal(format!("invalid state json: {}", e)))?;
         Ok(Some(
-            parsed.get("state").and_then(|v| v.as_str()).unwrap_or("unread").to_string(),
+            parsed
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unread")
+                .to_string(),
         ))
     }
 
@@ -319,12 +360,16 @@ impl JetsService {
         let inbox_subject = self.subject_for_cmd(&input.envelope.to);
         let audit_subject = self.subject_for_evt(&input.envelope.from);
 
-        self.ensure_stream(&js, inbox_stream.clone(), inbox_subject.clone()).await?;
-        self.ensure_stream(&js, audit_stream, audit_subject.clone()).await?;
+        self.ensure_stream(&js, inbox_stream.clone(), inbox_subject.clone())
+            .await?;
+        self.ensure_stream(&js, audit_stream, audit_subject.clone())
+            .await?;
         self.ensure_dlq_stream(&js).await?;
 
         let state_kv = self.ensure_kv(&js, &self.state_kv, 5, 0).await?;
-        let idem_kv = self.ensure_kv(&js, &self.idempotency_kv, 1, 24 * 3600).await?;
+        let idem_kv = self
+            .ensure_kv(&js, &self.idempotency_kv, 1, 24 * 3600)
+            .await?;
         let data_kv = self.ensure_kv(&js, &self.data_kv, 3, 7 * 24 * 3600).await?;
 
         if !input.envelope.idempotency_key.is_empty() {
@@ -335,7 +380,9 @@ impl JetsService {
                 .map_err(|e| JetsError::Internal(format!("failed to read idempotency kv: {}", e)))?
                 .is_some()
             {
-                return Err(JetsError::Conflict("idempotency key already used".to_string()));
+                return Err(JetsError::Conflict(
+                    "idempotency key already used".to_string(),
+                ));
             }
         }
 
@@ -368,7 +415,9 @@ impl JetsService {
                     .into(),
                 )
                 .await
-                .map_err(|e| JetsError::Internal(format!("failed to write idempotency marker: {}", e)))?;
+                .map_err(|e| {
+                    JetsError::Internal(format!("failed to write idempotency marker: {}", e))
+                })?;
         }
 
         js.publish(audit_subject, bytes.into())
@@ -385,15 +434,22 @@ impl JetsService {
         })
     }
 
-    pub async fn read_inbox(&self, filter: ReadInboxFilter) -> Result<Vec<InboxMessage>, JetsError> {
+    pub async fn read_inbox(
+        &self,
+        filter: ReadInboxFilter,
+    ) -> Result<Vec<InboxMessage>, JetsError> {
         if filter.target.trim().is_empty() {
             return Err(JetsError::InvalidInput("target is required".to_string()));
         }
 
         let js = self.js().await?;
         let stream_name = Self::stream_name(&self.inbox_stream_prefix, &filter.target);
-        self.ensure_stream(&js, stream_name.clone(), self.subject_for_cmd(&filter.target))
-            .await?;
+        self.ensure_stream(
+            &js,
+            stream_name.clone(),
+            self.subject_for_cmd(&filter.target),
+        )
+        .await?;
         let state_kv = self.ensure_kv(&js, &self.state_kv, 5, 0).await?;
         let mut stream = js
             .get_stream(stream_name.clone())
@@ -484,22 +540,21 @@ impl JetsService {
 
         let mut dlq_forwarded = false;
         if matches!(action, AckAction::Nack) {
-            let payload = if let Some(bytes) = data_kv
-                .get(msg_id)
-                .await
-                .map_err(|e| JetsError::Internal(format!("failed to read message bytes: {}", e)))?
-            {
-                bytes
-            } else {
-                serde_json::json!({
-                    "msg_id": msg_id,
-                    "reason": reason.unwrap_or("nack"),
-                    "failed_at_ms": chrono::Utc::now().timestamp_millis(),
-                })
-                .to_string()
-                .into_bytes()
-                .into()
-            };
+            let payload =
+                if let Some(bytes) = data_kv.get(msg_id).await.map_err(|e| {
+                    JetsError::Internal(format!("failed to read message bytes: {}", e))
+                })? {
+                    bytes
+                } else {
+                    serde_json::json!({
+                        "msg_id": msg_id,
+                        "reason": reason.unwrap_or("nack"),
+                        "failed_at_ms": chrono::Utc::now().timestamp_millis(),
+                    })
+                    .to_string()
+                    .into_bytes()
+                    .into()
+                };
 
             js.publish(self.subject_dlq.clone(), payload)
                 .await
@@ -561,7 +616,9 @@ impl JetsService {
         replay_to: Option<&str>,
     ) -> Result<PublishResult, JetsError> {
         if stream_seq == 0 {
-            return Err(JetsError::InvalidInput("stream_seq must be > 0".to_string()));
+            return Err(JetsError::InvalidInput(
+                "stream_seq must be > 0".to_string(),
+            ));
         }
 
         let js = self.js().await?;
@@ -590,7 +647,9 @@ impl JetsService {
     }
 
     pub fn normalize_state_filter(input: Option<&str>) -> Result<Option<String>, JetsError> {
-        let Some(v) = input else { return Ok(None); };
+        let Some(v) = input else {
+            return Ok(None);
+        };
         let normalized = v.trim().to_ascii_lowercase();
         if normalized.is_empty() {
             return Ok(None);
@@ -632,10 +691,16 @@ impl JetsService {
         out.insert("from".to_string(), envelope.from.clone());
         out.insert("to".to_string(), envelope.to.clone());
         out.insert("request_id".to_string(), envelope.request_id.clone());
-        out.insert("permission_level".to_string(), format!("{}", envelope.permission_level));
+        out.insert(
+            "permission_level".to_string(),
+            format!("{}", envelope.permission_level),
+        );
         if let Some(payload) = envelope.payload.as_ref() {
             if let Some(kind) = payload.kind.as_ref() {
-                out.insert("payload_kind".to_string(), Self::payload_kind_name(kind).to_string());
+                out.insert(
+                    "payload_kind".to_string(),
+                    Self::payload_kind_name(kind).to_string(),
+                );
             }
         }
         out
