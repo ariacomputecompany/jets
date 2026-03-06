@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package jets;
+
+enum PermissionLevel {
+  PERMISSION_LEVEL_UNSPECIFIED = 0;
+  READ_ONLY = 1;
+  WRITE_STATE = 2;
+  EXECUTE = 3;
+  ADMIN = 4;
+  FULL = 5;
+}
+
+enum ApplyMode {
+  APPLY_MODE_UNSPECIFIED = 0;
+  DRY_RUN = 1;
+  ENFORCE = 2;
+}
+
+enum AckStatus {
+  ACK_STATUS_UNSPECIFIED = 0;
+  APPLIED = 1;
+  REJECTED = 2;
+  CONFLICT = 3;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  INVALID_SCHEMA = 1;
+  PERMISSION_DENIED = 2;
+  VERSION_CONFLICT = 3;
+  EXPIRED = 4;
+  TIMEOUT = 5;
+  UNKNOWN_TARGET = 6;
+  APPLY_FAILED = 7;
+  IDMP_REPLAY = 8;
+}
+
+message StateSnapshot {
+  string content_type = 1;
+  bytes data = 2;
+}
+
+message StatePatch {
+  string content_type = 1;
+  bytes patch = 2;
+  uint64 desired_state_version = 3;
+  ApplyMode apply_mode = 4;
+}
+
+message ExecCommand {
+  repeated string argv = 1;
+  uint64 timeout_ms = 2;
+  string workdir = 3;
+  map<string, string> env = 4;
+  uint64 desired_state_version = 5;
+  ApplyMode apply_mode = 6;
+}
+
+message FilePatch {
+  string path = 1;
+  string content_type = 2;
+  bytes patch = 3;
+  uint64 desired_state_version = 4;
+  ApplyMode apply_mode = 5;
+}
+
+message EnvPatch {
+  map<string, string> set = 1;
+  repeated string unset = 2;
+  uint64 desired_state_version = 3;
+  ApplyMode apply_mode = 4;
+}
+
+message LifecycleAction {
+  string action = 1;
+  uint64 desired_state_version = 2;
+  ApplyMode apply_mode = 3;
+}
+
+message AckPayload {
+  AckStatus status = 1;
+  uint64 applied_at = 2;
+  uint64 previous_version = 3;
+  uint64 result_version = 4;
+  ErrorCode error_code = 5;
+  string error_message = 6;
+}
+
+message ErrorPayload {
+  ErrorCode code = 1;
+  string message = 2;
+  map<string, string> details = 3;
+}
+
+message Payload {
+  oneof kind {
+    StateSnapshot state_snapshot = 1;
+    StatePatch state_patch = 2;
+    ExecCommand exec_command = 3;
+    FilePatch file_patch = 4;
+    EnvPatch env_patch = 5;
+    LifecycleAction lifecycle_action = 6;
+    AckPayload ack = 7;
+    ErrorPayload error = 8;
+  }
+}
+
+message Envelope {
+  uint32 version = 1;
+  string msg_id = 2;
+  string request_id = 3;
+  string trace_id = 4;
+  string correlation_id = 5;
+  string causation_id = 6;
+  string from = 7;
+  string to = 8;
+  string stream_key = 9;
+  uint64 seq = 10;
+  uint64 sent_at = 11;
+  uint64 ttl_ms = 12;
+  PermissionLevel permission_level = 13;
+  string idempotency_key = 14;
+  Payload payload = 15;
+}

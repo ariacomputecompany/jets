@@ -1,0 +1,20 @@
+[package]
+name = "jets"
+version = "0.1.0"
+edition = "2021"
+description = "NATS + JetStream + Protobuf messaging primitive"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ariacomputecompany/jets"
+
+[dependencies]
+async-nats = "0.38"
+base64 = "0.21"
+chrono = "0.4"
+prost = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "macros"] }
+uuid = { version = "1", features = ["v4"] }
+
+[build-dependencies]
+prost-build = "0.14"
