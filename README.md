@@ -6,9 +6,6 @@
 - JetStream for durability/replay/ack state
 - Protobuf envelopes for strict typed contracts
 
-It is intentionally just the transport + durable messaging core.
-No tenant/user scoping, no product-specific auth, and no app business logic.
-
 ## Features
 
 - Strict protobuf envelope contract (`proto/jets.proto`)
