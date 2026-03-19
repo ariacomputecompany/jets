@@ -139,6 +139,52 @@ impl Default for JetsService {
 }
 
 impl JetsService {
+    fn idempotency_kv_key(target: &str, idempotency_key: &str) -> Result<String, JetsError> {
+        let t = target.trim();
+        let i = idempotency_key.trim();
+        if t.is_empty() || i.is_empty() {
+            return Err(JetsError::InvalidInput(
+                "target and idempotency_key are required".to_string(),
+            ));
+        }
+        let ns_input = format!("{}:{}", t, i);
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for b in ns_input.as_bytes() {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        Ok(format!("idem_{:016x}", hash))
+    }
+
+    fn legacy_idempotency_kv_key(target: &str, idempotency_key: &str) -> String {
+        format!("{}:{}", target, idempotency_key)
+    }
+
+    async fn idempotency_marker_exists(
+        &self,
+        kv: &jetstream::kv::Store,
+        target: &str,
+        idempotency_key: &str,
+    ) -> Result<bool, JetsError> {
+        let canonical = Self::idempotency_kv_key(target, idempotency_key)?;
+        if kv
+            .get(&canonical)
+            .await
+            .map_err(|e| JetsError::Internal(format!("failed to read idempotency kv: {}", e)))?
+            .is_some()
+        {
+            return Ok(true);
+        }
+
+        // Backward compatibility: attempt legacy key lookup. Ignore format errors.
+        let legacy = Self::legacy_idempotency_kv_key(target, idempotency_key);
+        match kv.get(&legacy).await {
+            Ok(Some(_)) => Ok(true),
+            Ok(None) => Ok(false),
+            Err(_) => Ok(false),
+        }
+    }
+
     pub fn nats_url(&self) -> &str {
         &self.nats_url
     }
@@ -395,12 +441,13 @@ impl JetsService {
         let data_kv = self.ensure_kv(&js, &self.data_kv, 3, 7 * 24 * 3600).await?;
 
         if !input.envelope.idempotency_key.is_empty() {
-            let idem_key = format!("{}:{}", input.envelope.to, input.envelope.idempotency_key);
-            if idem_kv
-                .get(&idem_key)
-                .await
-                .map_err(|e| JetsError::Internal(format!("failed to read idempotency kv: {}", e)))?
-                .is_some()
+            if self
+                .idempotency_marker_exists(
+                    &idem_kv,
+                    &input.envelope.to,
+                    &input.envelope.idempotency_key,
+                )
+                .await?
             {
                 return Err(JetsError::Conflict(
                     "idempotency key already used".to_string(),
@@ -424,7 +471,8 @@ impl JetsService {
             .map_err(|e| JetsError::Internal(format!("failed to store message bytes: {}", e)))?;
 
         if !input.envelope.idempotency_key.is_empty() {
-            let idem_key = format!("{}:{}", input.envelope.to, input.envelope.idempotency_key);
+            let idem_key =
+                Self::idempotency_kv_key(&input.envelope.to, &input.envelope.idempotency_key)?;
             idem_kv
                 .put(
                     &idem_key,
