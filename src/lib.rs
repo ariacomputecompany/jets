@@ -6,5 +6,6 @@ pub mod service;
 
 pub use service::{
     AckAction, AckResult, DlqMessage, InboxMessage, JetsError, JetsService, ListDlqFilter,
-    PublishInput, PublishResult, ReadInboxFilter,
+    PublishInput, PublishManyInput, PublishManyResult, PublishResult, PublishTargetResult,
+    ReadInboxFilter,
 };

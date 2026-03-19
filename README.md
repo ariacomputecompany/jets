@@ -14,6 +14,7 @@
 - Global DLQ stream
 - Message state tracking (`unread`, `acked`, `failed`, `expired`)
 - Idempotency key guard rails
+- One-to-all fanout publish (`publish_many`)
 - DLQ replay
 
 ## Install

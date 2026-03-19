@@ -65,6 +65,28 @@ pub struct PublishResult {
 }
 
 #[derive(Debug, Clone)]
+pub struct PublishManyInput {
+    pub envelope: Envelope,
+    pub targets: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublishTargetResult {
+    pub target: String,
+    pub msg_id: String,
+    pub result: Option<PublishResult>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublishManyResult {
+    pub request_id: String,
+    pub accepted: usize,
+    pub failed: usize,
+    pub results: Vec<PublishTargetResult>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReadInboxFilter {
     pub target: String,
     pub from_seq: Option<u64>,
@@ -431,6 +453,93 @@ impl JetsService {
             subject: inbox_subject,
             stream_seq: ack.sequence,
             duplicate: ack.duplicate,
+        })
+    }
+
+    pub async fn publish_many(
+        &self,
+        input: PublishManyInput,
+    ) -> Result<PublishManyResult, JetsError> {
+        if input.targets.is_empty() {
+            return Err(JetsError::InvalidInput(
+                "at least one target is required for fanout publish".to_string(),
+            ));
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut normalized_targets = Vec::new();
+        for target in input.targets {
+            let trimmed = target.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if seen.insert(trimmed.to_string()) {
+                normalized_targets.push(trimmed.to_string());
+            }
+        }
+        if normalized_targets.is_empty() {
+            return Err(JetsError::InvalidInput(
+                "fanout publish targets cannot be empty".to_string(),
+            ));
+        }
+
+        let request_id = if input.envelope.request_id.trim().is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            input.envelope.request_id.clone()
+        };
+
+        let base_msg_id = if input.envelope.msg_id.trim().is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            input.envelope.msg_id.clone()
+        };
+
+        let mut accepted = 0usize;
+        let mut results = Vec::with_capacity(normalized_targets.len());
+        for (idx, target) in normalized_targets.iter().enumerate() {
+            let mut envelope = input.envelope.clone();
+            envelope.request_id = request_id.clone();
+            envelope.to = target.clone();
+            envelope.stream_key = target.clone();
+            envelope.sent_at = chrono::Utc::now().timestamp_millis() as u64;
+            envelope.seq = 0;
+            envelope.msg_id = format!("{}-{}", base_msg_id, idx + 1);
+            if envelope.causation_id.trim().is_empty() {
+                envelope.causation_id = base_msg_id.clone();
+            }
+
+            match self
+                .publish(PublishInput {
+                    envelope: envelope.clone(),
+                })
+                .await
+            {
+                Ok(result) => {
+                    accepted += 1;
+                    results.push(PublishTargetResult {
+                        target: target.clone(),
+                        msg_id: envelope.msg_id,
+                        result: Some(result),
+                        error: None,
+                    });
+                }
+                Err(err) => {
+                    results.push(PublishTargetResult {
+                        target: target.clone(),
+                        msg_id: envelope.msg_id,
+                        result: None,
+                        error: Some(err.to_string()),
+                    });
+                }
+            }
+        }
+
+        Ok(PublishManyResult {
+            request_id,
+            accepted,
+            failed: normalized_targets.len().saturating_sub(accepted),
+            results,
         })
     }
 
